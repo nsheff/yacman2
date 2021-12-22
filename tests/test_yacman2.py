@@ -48,7 +48,7 @@ class TestPathExpand:
 
 
     def test_write_creates_file(self, data_path, list_locks):
-        yacmap = yacman.YacAttMap(entries={}, writable=True)
+        yacmap = yacman.YacAttMap(entries={})
         yacmap.write(filepath=make_cfg_file_path("writeout.yaml", data_path))
         # assert os.path.exists(make_lock_path("writeout.yaml", data_path))
         assert os.path.exists(make_cfg_file_path("writeout.yaml", data_path))
@@ -80,18 +80,18 @@ class TestReading:
         Here we test that the object constructor waits for a second and
         raises a Runtime error because it tries to lock the file for reading by default
         """
-        yacmap = yacman.YacAttMap(filepath=cfg_file, writable=True)
+        yacmap = yacman.YacAttMap(filepath=cfg_file, locked=True)
         with pytest.raises(RuntimeError):
             yacman.YacAttMap(filepath=cfg_file, wait_max=0.01)
-        yacmap.make_readonly()
+        yacmap.unlock()
 
     def test_skip_locks_before_reading(self, data_path, cfg_file):
         """
         Here we test that the you can skip the read lock if you want.
         """
-        yacmap = yacman.YacAttMap(filepath=cfg_file, writable=True)
+        yacmap = yacman.YacAttMap(filepath=cfg_file, locked=True)
         yacman.YacAttMap(filepath=cfg_file, skip_read_lock=True)
-        yacmap.make_readonly()
+        yacmap.unlock()
 
     def test_locking_is_opt_in(self, cfg_file, locked_cfg_file):
         """
@@ -133,24 +133,24 @@ class TestInit:
 class TestContextManager:
     @pytest.mark.parametrize("state", [True, False])
     def test_context_manager_does_not_change_state(self, cfg_file, state):
-        yacmap = yacman.YacAttMap(filepath=cfg_file, writable=state)
+        yacmap = yacman.YacAttMap(filepath=cfg_file, locked=state)
         with yacmap as _:
             # print(_)
             pass
-        assert yacmap.writable == state
+        assert yacmap.locked == state
 
     @pytest.mark.parametrize("state", [True, False])
     def test_context_manager_saves_updates(self, cfg_file, state):
-        yacmap = yacman.YacAttMap(filepath=cfg_file, writable=state)
+        yacmap = yacman.YacAttMap(filepath=cfg_file, locked=state)
         with yacmap as y:
             y["testattr"] = "testval"
-            yacmap.write()
-        if yacmap.writable:
-            yacmap.make_readonly()
-        yacmap1 = yacman.YacAttMap(filepath=cfg_file, writable=True)
+            y.write()
+        if yacmap.locked:
+            yacmap.unlock()
+        yacmap1 = yacman.YacAttMap(filepath=cfg_file, locked=True)
         assert yacmap1["testattr"] == "testval"
         del yacmap1["testattr"]
-        yacmap1.make_readonly()
+        yacmap1.unlock()
 
     def test_context_manager_allows_writing(self, data_path):
         with yacman.YAMLConfigManager(filepath=make_cfg_file_path("conf.yaml", data_path)) as ycm:
@@ -211,7 +211,7 @@ def test_nested_inserts():
 
 
 
-def test_reinit(data_path):
+def test_rebase(data_path):
     ycm = yacman.YAMLConfigManager(filepath=make_cfg_file_path("conf.yaml", data_path))
     ycm["abc"] = 6
     with ycm as _:
@@ -219,22 +219,66 @@ def test_reinit(data_path):
     # The writing process should not reset the file.
     assert (ycm["abc"] == 6)
 
-def test_reinit_nested(data_path):
-    yacmap = yacman.YacAttMap(entries={"level1": {"level2": "value"}}, writable=True)
-    yacmap.write(filepath=make_cfg_file_path("conf2.yaml", data_path))   
+def test_rebase_nested(data_path):
+    yacmap = yacman.YacAttMap(entries={"level1": {"level2": "value"}})
+    yacmap.write(filepath=make_cfg_file_path("conf2.yaml", data_path))
 
     ycm = yacman.YAMLConfigManager(filepath=make_cfg_file_path("conf2.yaml", data_path))
     ycm["level1"]["level2b"] = "val2"
-    ycm._reinit()
+    ycm.rebase()
     # print(ycm)
     assert(ycm["level1"]["level2"] == "value")
     assert(ycm["level1"]["level2b"] == "val2")
     ycm["level1"] = {"level2c": "inserted"}
-    ycm._reinit()
-    # print(ycm)
+    ycm.rebase()
+    print(ycm)
     assert(ycm["level1"]["level2"] == "value")
     assert(ycm["level1"]["level2c"] == "inserted")
     with pytest.raises(KeyError):
         ycm["level1"]["level2b"]
 
+    with ycm as _:
+        _.write()
+
+    print(yacmap)
+
+    yacmap.filepath = make_cfg_file_path("conf2.yaml", data_path)
+    with yacmap as _:
+        _.rebase()
+        print(_)
+        _.write()
+
+    yacmap2 = yacman.YAMLConfigManager(filepath=make_cfg_file_path("conf2.yaml", data_path))
+    print(yacmap2)
+    assert(yacmap2["level1"]["level2"] == "value")
+    assert(yacmap2["level1"]["level2c"] == "inserted")
     os.remove(make_cfg_file_path("conf2.yaml", data_path))
+
+
+
+
+def test_readonly_file_system(data_path):
+    os.chmod(make_cfg_file_path("readonly/", data_path), 0o755)
+    os.chmod(make_cfg_file_path("readonly/conf.yaml", data_path), 0o755)
+    ycm = yacman.YAMLConfigManager(filepath=make_cfg_file_path("readonly/conf.yaml", data_path),
+        strict_ro_locks=True)
+    print(ycm.locked)
+    with ycm as _:
+        _["readonly"] = True
+        _.write()
+    
+    os.chmod(make_cfg_file_path("readonly/", data_path), 0o544)
+    ycm2 = yacman.YAMLConfigManager(filepath=make_cfg_file_path("readonly/conf.yaml", data_path),
+        skip_read_lock=True, strict_ro_locks=True)
+
+    with pytest.raises(OSError):
+        with ycm2 as _:
+            pass
+    os.chmod(make_cfg_file_path("readonly", data_path), 0o755)
+
+    # ycm = yacman.YAMLConfigManager(filepath=make_cfg_file_path("readonly/conf.yaml", data_path), strict_locks=True)
+
+    # with pytest.raises(OSError):
+    #     with ycm as _:
+    #         ycm["readonly"] = True
+    #         _.write()

@@ -10,7 +10,7 @@ from ubiquerg import create_lock, expandpath, is_url, make_lock_path, mkabs, rem
 
 _LOGGER = logging.getLogger(__name__)
 
-# Hack for string indexes of both ordered and unordered yaml representations
+# Hack for yaml string indexes
 # Credit: Anthon
 # https://stackoverflow.com/questions/50045617
 # https://stackoverflow.com/questions/5121931
@@ -22,9 +22,7 @@ _LOGGER = logging.getLogger(__name__)
 
 # Only do once.
 if not hasattr(yaml.SafeLoader, "patched_yaml_loader"):
-
     _LOGGER.debug("Patching yaml loader")
-
     def my_construct_mapping(self, node, deep=False):
         data = self.construct_mapping_org(node, deep)
         return {
@@ -33,40 +31,25 @@ if not hasattr(yaml.SafeLoader, "patched_yaml_loader"):
             ]
             for key in data
         }
-
     yaml.SafeLoader.construct_mapping_org = yaml.SafeLoader.construct_mapping
     yaml.SafeLoader.construct_mapping = my_construct_mapping
     yaml.SafeLoader.patched_yaml_loader = True
 
-
 # Constants: to do, remove these
 
 IK = "__internal"
-
-USE_LOCKS_KEY = "locks"
-WAIT_MAX_KEY = "wait_time"
-ALIASES_KEY = "aliases"
-ALIASES_KEY_RAW = "aliases_raw"
-WRITE_VALIDATE_KEY = "validate_on_write"
+DEFAULT_WAIT_TIME = 60
+LOCK_PREFIX = "lock."
 SCHEMA_KEY = "schema"
 
 ATTR_KEYS = (
     IK,
-    USE_LOCKS_KEY,
-    WAIT_MAX_KEY,
-    ALIASES_KEY,
-    ALIASES_KEY_RAW,
-    WRITE_VALIDATE_KEY,
     SCHEMA_KEY,
 )
 
-LOCK_PREFIX = "lock."
-DEFAULT_RO = False
-DEFAULT_WAIT_TIME = 60
+from collections.abc import MutableMapping
 
-
-from collections import UserDict
-class YAMLConfigManager(UserDict):
+class YAMLConfigManager(MutableMapping):
     """
     A YAML configuration manager benefits, providing file locking, loading,
     writing, etc.  for YAML configuration files. but without the requirement
@@ -78,8 +61,9 @@ class YAMLConfigManager(UserDict):
         entries=None,
         filepath=None,
         yamldata=None,
-        writable=False,
+        locked=False,
         wait_max=DEFAULT_WAIT_TIME,
+        strict_ro_locks=False,
         skip_read_lock=False,
         schema_source=None,
         validate_on_write=False,
@@ -95,6 +79,8 @@ class YAMLConfigManager(UserDict):
         :param bool writable: whether to create the object with write capabilities
         :param int wait_max: how long to wait for creating an object when the file
             that data will be read from is locked
+        :param bool strict_ro_locks: By default, we allow RO filesystems that can't be locked.
+            Turn on strict_ro_locks to error if locks cannot be enforced on readonly filesystems.            
         :param bool skip_read_lock: whether the file should not be locked for reading
             when object is created in read only mode
         :param str schema_source: path or a URL to a jsonschema in YAML format to use
@@ -116,42 +102,26 @@ class YAMLConfigManager(UserDict):
         self.skip_read_lock = skip_read_lock
         self.schema_source = schema_source
         self.validate_on_write = validate_on_write
-        self.writable = writable
-        self.already_writable = writable
+        self.locked = locked
+        self.strict_ro_locks = strict_ro_locks
+        self.already_locked = locked
 
-        if self.writable:
+        if self.locked:
             if filepath:
                 create_lock(filepath, wait_max)
             else:
-                self.writable = False
-                writable = False
+                self.locked = False
+                locked = False
                 _LOGGER.warning(
-                    "Argument 'writable' is disregarded when the object is created "
+                    "Argument 'locked' is disregarded when the object is created "
                     "with 'entries' rather than 'filepath'"
                 )
-        if filepath:
-            if not skip_read_lock and not writable and os.path.exists(filepath):
-                create_lock(filepath, wait_max)
-                file_contents = load_yaml(filepath)
-                remove_lock(filepath)
-            elif os.path.exists(filepath):
-                file_contents = load_yaml(filepath)
-            elif create_file:
-                _LOGGER.debug("File does not exist, create_file is true")
-                file_contents = {}
-                with open(filepath, 'w') as file:
-                    pass
-            else:
-                raise FileNotFoundError(f"No such file: {filepath}")
 
-            if entries:
-                if file_contents is None:
-                    # if file is empty, initialize its contents to an empty dict
-                    file_contents = {}
-                file_contents.update(entries)
-            entries = file_contents
-        elif yamldata:
-            entries = yaml.load(yamldata, yaml.SafeLoader)
+        if self.filepath and not skip_read_lock:
+            with self as _:
+                entries = self.load(filepath, entries, yamldata, create_file)
+        else:
+            entries = self.load(filepath, entries, yamldata, create_file)
 
         # We store the values in a dict under .data
         self.data = dict(entries or {})
@@ -168,9 +138,68 @@ class YAMLConfigManager(UserDict):
             setattr(getattr(self, IK), SCHEMA_KEY, load_yaml(sp))
             self.validate()
 
+    def load(self, filepath=None, entries=None, yamldata=None, create_file=False):
+        if filepath:
+            if os.path.exists(filepath):
+                file_contents = load_yaml(filepath)
+            elif create_file:
+                _LOGGER.debug("File does not exist, create_file is true")
+                file_contents = {}
+                with open(filepath, "w") as file:
+                    pass
+            else:
+                raise FileNotFoundError(f"No such file: {filepath}")
+
+            if entries:
+                if file_contents is None:
+                    # if file is empty, initialize its contents to an empty dict
+                    file_contents = {}
+                file_contents.update(entries)
+            entries = file_contents
+        elif yamldata:
+            entries = yaml.load(yamldata, yaml.SafeLoader)
+        return entries
+
+    def lock(self):
+        # print("Locking...")
+        if not self.filepath:
+            raise TypeError("Can't lock without a filepath")
+
+        # Check for permissions to write a lock file
+        lock_path = make_lock_path(self.filepath)
+        if not os.access(os.path.dirname(lock_path), os.W_OK):
+            if self.strict_ro_locks:
+                raise OSError(f"No write access to '{lock_path}'; can't lock file.")
+            else:
+                _LOGGER.warning(f"No write access to '{lock_path}'; can't lock file.")
+                self.locked = True
+                return True
+
+        create_lock(self.filepath, self.wait_max)
+        self.locked = True
+        return True
+
+    def unlock(self):
+        # print("Unlocking...")
+        if not self.filepath:
+            raise TypeError("Can't unlock without a filepath")
+        # Check for permissions to write a lock file
+        lock_path = make_lock_path(self.filepath)
+        if not os.access(os.path.dirname(lock_path), os.W_OK):
+            if self.strict_ro_locks:
+                raise OSError(f"No write access to '{lock_path}' can't lock file.")
+            else:
+                _LOGGER.warning(f"No write access to '{lock_path}' can't lock file.")
+                self.locked = False
+                return True
+
+        remove_lock(self.filepath)
+        self.locked = False
+        return True
+
     def __del__(self):
-        if self.filepath and self.writable:
-            self.make_readonly()
+        if self.filepath and self.locked:
+            self.unlock()
 
     # def __repr__(self):
     #     # Here we want to render the data in a nice way; and we want to indicate
@@ -179,23 +208,24 @@ class YAMLConfigManager(UserDict):
     #     return self._render(self.data)
 
     def __enter__(self):
-        if self.writable:
-            _LOGGER.debug("Already writable upon entering context manager")
-            self.already_writable = True
-        self.make_writable()
+        if self.locked:
+            _LOGGER.debug("Already locked upon entering context manager")
+            self.already_locked = True
+        else:
+            self.lock()
         return self
 
     def __exit__(self, exc_type, exc_value, exc_traceback):
-        if self.already_writable:
-            self.writable = True
-            self.already_writable = True
+        if self.already_locked:
+            self.locked = True
+            self.already_locked = False
             return False
-        self.make_readonly()
+        self.unlock()
 
         # Must return False, otherwise context exceptions are suppressed
         return False
 
-    def _reinit(self, filepath=None):
+    def rebase(self, filepath=None):
         """
         Reload the object from file, then update with current information
 
@@ -204,23 +234,24 @@ class YAMLConfigManager(UserDict):
         fp = filepath or self.filepath
         if fp is not None:
             local_data = self.data
-            self.__init__(filepath=fp, skip_read_lock=True)
+            self.data = self.load(filepath=fp)
             deep_update(self.data, local_data)
             # self.data.update(local_data)
         else:
-            _LOGGER.warning("Reinit has no effect if no filepath")
+            _LOGGER.warning("Rebase has no effect if no filepath")
 
+        return self
 
-    def _reset(self, filepath=None):
+    def reset(self, filepath=None):
         """
         Reset dict contents to file contents, or to empty dict if no filepath found.
         """
         fp = filepath or self.filepath
         if fp is not None:
-            self.__init__(filepath=fp, skip_read_lock=True)
+            self.data = self.load(filepath=fp, skip_read_lock=True)
         else:
-            self.__init__(entries={}, skip_read_lock=True)
-
+            self.data = self.load(entries={}, skip_read_lock=True)
+        return self
 
     def validate(self, schema=None, exclude_case=False):
         """
@@ -269,49 +300,23 @@ class YAMLConfigManager(UserDict):
             or when writing to a file that is locked by a different object
         :return str: the path to the created files
         """
-        if filepath:
-            _check_filepath(filepath)
-            lock = make_lock_path(filepath)
-            if os.path.exists(filepath):
-                if os.path.exists(lock):
-                    raise OSError(
-                        f"The file '{filepath}' is locked by a different process"
-                    )
-                else:
-                    _LOGGER.warning(
-                        "Writing to an unlocked, existing file. Beware of collisions."
-                    )
-            create_lock(filepath, self.wait_max)
-            _LOGGER.debug(f"writing to file path: {filepath}")
-            with open(filepath, "w") as f:
-                f.write(self.to_yaml())
-            self._remove_lock(filepath)
-        else:
-            # Previously we didn't allow you to just 'write'.
-            #  But now the idea is that w
-            if not self.writable:
-                raise OSError(
-                    "You should write from within a context manager, which sets the object to writable"
-                )
+        fp = filepath or self.filepath
+        if not fp:
+            raise OSError("Must provide a filepath to write.")
 
-            if schema is not None or self.validate_on_write:
-                self.validate(schema=schema, exclude_case=exclude_case)
-            filepath = _check_filepath(self.filepath)
-            lock = make_lock_path(filepath)
-            if filepath != self.filepath:
-                if os.path.exists(filepath):
-                    if not os.path.exists(lock):
-                        _LOGGER.warning(
-                            "Writing to a non-locked, existing file. Beware of collisions."
-                        )
-                    else:
-                        raise OSError(
-                            f"The file '{filepath}' is locked by a different process"
-                        )
-            with open(filepath, "w") as f:
-                f.write(self.to_yaml())
+        if fp == self.filepath:
+            if not self.locked:
+                raise OSError("Please write using a context manager, which locks the file")
 
-        abs_path = os.path.abspath(filepath)
+        _check_filepath(fp)
+        _LOGGER.debug(f"Writing to file '{fp}'")
+        with open(fp, "w") as f:
+            f.write(self.to_yaml())
+
+        if schema is not None or self.validate_on_write:
+            self.validate(schema=schema, exclude_case=exclude_case)
+
+        abs_path = os.path.abspath(fp)
         _LOGGER.debug(f"Wrote to a file: {abs_path}")
         return os.path.abspath(abs_path)
 
@@ -374,65 +379,6 @@ class YAMLConfigManager(UserDict):
         else:
             return class_name + ": {}"
 
-    @staticmethod
-    def _remove_lock(filepath):
-        """
-        Remove lock
-
-        :param str filepath: path to the file to remove the lock for. Not the
-            path to the lock!
-        :return bool: whether the lock was found and removed
-        """
-        lock = make_lock_path(_check_filepath(filepath))
-        if os.path.exists(lock):
-            os.remove(lock)
-            return True
-        return False
-
-    def make_readonly(self):
-        """
-        Remove lock and make the object read only.
-
-        :return bool: a logical indicating whether any locks were removed
-        """
-        self.writable = False
-        if self._remove_lock(self.filepath):
-            _LOGGER.debug("Made object read-only")
-            return True
-        return False
-
-    def make_writable(self, filepath=None):
-        """
-        Grant write capabilities to the object and re-read the file.
-
-        Any changes made to the attributes are overwritten so that the object
-        reflects the contents of the specified config file
-
-        :param str filepath: path to the file that the contents will be written to
-        :return YacAttMap: updated object
-        """
-        if filepath and filepath != self.filepath:
-            _LOGGER.info(f"Resetting filepath to: {filepath}")
-            self.filepath = filepath
-
-        if self.writable:
-            _LOGGER.info(f"Object is already writable, path: {self.filepath}")
-            return True
-
-        _check_filepath(self.filepath)
-        create_lock(self.filepath, self.wait_max)
-        try:
-            self._reinit(self.filepath)
-        except OSError:
-            _LOGGER.debug(f"File '{self.filepath}' not found")
-            pass
-        except Exception as e:
-            self._reinit()
-            _LOGGER.info(f"File '{self.filepath}' was not read, got an exception: {e}")
-        self.writable = True
-        _LOGGER.debug("Made object writable")
-        return True
-
     def __setitem__(self, item, value):
         self.data[item] = value
 
@@ -486,6 +432,7 @@ def _safely_expand_path(x):
         return {k: _safely_expand_path(v) for k, v in x.items()}
     return x
 
+
 def _unsafely_expand_path(x):
     if isinstance(x, str):
         return expandpath(x)
@@ -495,6 +442,8 @@ def _unsafely_expand_path(x):
         return x
         # return {k: _safely_expand_path(v) for k, v in x.items()}
     return x
+
+
 def get_data_lines(data, fun_key, space_per_level=2, fun_val=None):
     """
     Get text representation lines for a mapping's data.
@@ -694,8 +643,6 @@ def deep_update(old, new):
         else:
             old[key] = new[key]
     return old
-
-
 
 
 class YacAttMap(YAMLConfigManager):
