@@ -65,8 +65,8 @@ DEFAULT_RO = False
 DEFAULT_WAIT_TIME = 60
 
 
-# from collections.abc import MutableMapping
-class YAMLConfigManager(dict):
+from collections import UserDict
+class YAMLConfigManager(UserDict):
     """
     A YAML configuration manager benefits, providing file locking, loading,
     writing, etc.  for YAML configuration files. but without the requirement
@@ -83,7 +83,7 @@ class YAMLConfigManager(dict):
         skip_read_lock=False,
         schema_source=None,
         validate_on_write=False,
-        expand=True,
+        create_file=False,
     ):
         """
         Object constructor
@@ -116,7 +116,6 @@ class YAMLConfigManager(dict):
         self.skip_read_lock = skip_read_lock
         self.schema_source = schema_source
         self.validate_on_write = validate_on_write
-        self.expand = expand
         self.writable = writable
         self.already_writable = writable
 
@@ -135,8 +134,16 @@ class YAMLConfigManager(dict):
                 create_lock(filepath, wait_max)
                 file_contents = load_yaml(filepath)
                 remove_lock(filepath)
-            else:
+            elif os.path.exists(filepath):
                 file_contents = load_yaml(filepath)
+            elif create_file:
+                _LOGGER.debug("File does not exist, create_file is true")
+                file_contents = {}
+                with open(filepath, 'w') as file:
+                    pass
+            else:
+                raise FileNotFoundError(f"No such file: {filepath}")
+
             if entries:
                 if file_contents is None:
                     # if file is empty, initialize its contents to an empty dict
@@ -145,7 +152,9 @@ class YAMLConfigManager(dict):
             entries = file_contents
         elif yamldata:
             entries = yaml.load(yamldata, yaml.SafeLoader)
-        super(YAMLConfigManager, self).__init__(entries or {})
+
+        # We store the values in a dict under .data
+        self.data = dict(entries or {})
         if schema_source is not None:
             assert isinstance(schema_source, str), TypeError(
                 f"Path to the schema to validate the config must be a string"
@@ -163,11 +172,11 @@ class YAMLConfigManager(dict):
         if self.filepath and self.writable:
             self.make_readonly()
 
-    def __repr__(self):
-        # Here we want to render the data in a nice way; and we want to indicate
-        # the class if it's NOT a YacAttMap. If it is a YacAttMap we just want
-        # to give you the data without the class name.
-        return self._render(dict(self.items()))
+    # def __repr__(self):
+    #     # Here we want to render the data in a nice way; and we want to indicate
+    #     # the class if it's NOT a YacAttMap. If it is a YacAttMap we just want
+    #     # to give you the data without the class name.
+    #     return self._render(self.data)
 
     def __enter__(self):
         if self.writable:
@@ -188,14 +197,30 @@ class YAMLConfigManager(dict):
 
     def _reinit(self, filepath=None):
         """
-        Re-read the object from file, or reset to empty if no file
+        Reload the object from file, then update with current information
 
         :param str filepath: path to the file that should be read
         """
-        if filepath is not None:
-            self.__init__(filepath=filepath, skip_read_lock=True)
+        fp = filepath or self.filepath
+        if fp is not None:
+            local_data = self.data
+            self.__init__(filepath=fp, skip_read_lock=True)
+            deep_update(self.data, local_data)
+            # self.data.update(local_data)
+        else:
+            _LOGGER.warning("Reinit has no effect if no filepath")
+
+
+    def _reset(self, filepath=None):
+        """
+        Reset dict contents to file contents, or to empty dict if no filepath found.
+        """
+        fp = filepath or self.filepath
+        if fp is not None:
+            self.__init__(filepath=fp, skip_read_lock=True)
         else:
             self.__init__(entries={}, skip_read_lock=True)
+
 
     def validate(self, schema=None, exclude_case=False):
         """
@@ -244,7 +269,6 @@ class YAMLConfigManager(dict):
             or when writing to a file that is locked by a different object
         :return str: the path to the created files
         """
-        print("Writing...", filepath, self.filepath)
         if filepath:
             _check_filepath(filepath)
             lock = make_lock_path(filepath)
@@ -258,13 +282,11 @@ class YAMLConfigManager(dict):
                         "Writing to an unlocked, existing file. Beware of collisions."
                     )
             create_lock(filepath, self.wait_max)
-            print(f"writing to file path: {filepath}")
+            _LOGGER.debug(f"writing to file path: {filepath}")
             with open(filepath, "w") as f:
                 f.write(self.to_yaml())
             self._remove_lock(filepath)
         else:
-            print("Writing to known filepath")
-
             # Previously we didn't allow you to just 'write'.
             #  But now the idea is that w
             if not self.writable:
@@ -302,6 +324,11 @@ class YAMLConfigManager(dict):
         """
         return "\n".join(self.get_yaml_lines()) + ("\n" if trailing_newline else "")
 
+    def to_dict(self, expand=True):
+        # Seems like it's probably not necessary; can just use the object now.
+        # but for backwards compatibility.
+        return self.data
+
     def get_yaml_lines(
         self,
         conversions=((lambda obj: isinstance(obj, Mapping) and 0 == len(obj), None),),
@@ -314,13 +341,13 @@ class YAMLConfigManager(dict):
             and second is what to replace a value with if it satisfies the predicate
         :return list[str]: YAML representation lines
         """
-        if 0 == len(self):
+        if 0 == len(self.data):
             return ["{}"]
         # data = self._simplify_keyvalue(
         #     self._data_for_repr(), self._new_empty_basic_map, conversions=conversions
         # )
-        data = dict(self.items())
-        return self._render(data).split("\n")[1:]
+        # data = dict(self.items())
+        return self._render(self.data).split("\n")[1:]
 
     def _render(self, data, exclude_class_list=[]):
         def _custom_repr(obj, prefix=""):
@@ -406,22 +433,52 @@ class YAMLConfigManager(dict):
         _LOGGER.debug("Made object writable")
         return True
 
-    def __getitem__(self, item, expand=False):
+    def __setitem__(self, item, value):
+        self.data[item] = value
+
+    def __getitem__(self, item):
         """
         Fetch the value of given key.
 
         :param hashable item: key for which to fetch value
-        :param bool expand: whether to expand string value as path
         :return object: value mapped to given key, if available
         :raise KeyError: if the requested key is unmapped.
         """
-        v = super(YAMLConfigManager, self).__getitem__(item)
-        return _safely_expand_path(v) if self.expand or expand else v
+        return self.data[item]
+        # return _safely_expand_path(self.data[item]) if self.expand else self.data[item]
+
+    @property
+    def exp(self):
+        """
+        Returns a copy of the object's data elements with env vars and user vars
+        expanded. Use it like: object.exp["item"]
+        """
+        return _safely_expand_path(self.data)
+
+    def __iter__(self):
+        return iter(self.data)
+
+    def __len__(self):
+        return len(self.data)
+
+    def __delitem__(self, key):
+        value = self[key]
+        del self.data[key]
+        self.pop(value, None)
+
+    def __repr__(self):
+        return f"{type(self).__name__}({self.data})"
 
 
 from ubiquerg import expandpath
 
-
+# A big issue here is: if you route the __getitem__ through this,
+# then it returns a copy of the data, rather than the data itself.
+# That's the point, so we don't adjust it. But then you can't use multi-level
+# item setting, like ycm["x"]["y"] = value, because ycm['x'] returns a different
+# dict, and so you're updating that copy of it.
+# The solution is that we have to route expansion through a separate property,
+# so the setitem syntax can remain intact while preserving original values.
 def _safely_expand_path(x):
     if isinstance(x, str):
         return expandpath(x)
@@ -429,7 +486,15 @@ def _safely_expand_path(x):
         return {k: _safely_expand_path(v) for k, v in x.items()}
     return x
 
-
+def _unsafely_expand_path(x):
+    if isinstance(x, str):
+        return expandpath(x)
+    elif isinstance(x, Mapping):
+        for k in x.keys():
+            x[k] = _safely_expand_path(x[k])
+        return x
+        # return {k: _safely_expand_path(v) for k, v in x.items()}
+    return x
 def get_data_lines(data, fun_key, space_per_level=2, fun_val=None):
     """
     Get text representation lines for a mapping's data.
@@ -617,6 +682,20 @@ def select_config(
     return (
         os.path.abspath(selected_filepath) if selected_filepath else selected_filepath
     )
+
+
+def deep_update(old, new):
+    """
+    Recursively update nested dict, modifying source
+    """
+    for key, value in new.items():
+        if isinstance(value, Mapping) and value:
+            old[key] = deep_update(old.get(key, {}), value)
+        else:
+            old[key] = new[key]
+    return old
+
+
 
 
 class YacAttMap(YAMLConfigManager):

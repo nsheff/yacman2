@@ -22,24 +22,23 @@ class TestPathExpand:
     """
     YAMLConfigManager objects should expand environment variables and user paths.
     """
+    # @pytest.mark.skip
     def test_path_expand_user(self):
         cfg = yacman.YAMLConfigManager({"x": 5})
         cfg["pathA"] = "~"
-        assert (cfg["pathA"] == os.path.expanduser("~"))
+        assert (cfg.exp["pathA"] == os.path.expanduser("~"))
+        assert (cfg["pathA"] == "~")
 
+    # @pytest.mark.skip
     def test_path_expand(self):
         cfg = yacman.YAMLConfigManager({"x": 5})
         dummy_path = "/dummy/path/example"
         os.environ['BRAHMS'] = dummy_path
         cfg["bpath"] = "$BRAHMS"
-        assert (cfg["bpath"] == dummy_path)
-
-    def test_path_expand_off(self):
-        cfg = yacman.YAMLConfigManager({"x": 5}, expand=False)
-        dummy_path = "/dummy/path/example"
-        os.environ['BRAHMS'] = dummy_path
-        cfg["bpath"] = "$BRAHMS"
+        assert (cfg.exp["bpath"] == dummy_path)
         assert (cfg["bpath"] == "$BRAHMS")
+
+
 
         
     def test_access_item(self):
@@ -73,7 +72,6 @@ class TestPathExpand:
 
     def test_render_item(self):
         cfg = yacman.YAMLConfigManager({"x": 5})
-        print(cfg)   
 
 
 class TestReading:
@@ -115,14 +113,30 @@ class TestReading:
         open(empty_file_path, "a").close()
         y = yacman.YacAttMap(entries={a: v}, filepath=empty_file_path)
         assert a in y
+
         os.remove(empty_file_path)
+
+class TestInit:
+    def test_init_with_create_file(self, data_path):
+        a, v = "testattr", "testval"
+        empty_file_path = os.path.join(data_path, "empty_file.yaml")
+        # open(empty_file_path, "a").close()
+        with pytest.raises(FileNotFoundError):
+            y = yacman.YacAttMap(entries={a: v}, filepath=empty_file_path)
+        assert(not os.path.exists(empty_file_path))
+        y = yacman.YacAttMap(entries={a: v},
+            filepath=empty_file_path, create_file=True)
+        assert(os.path.exists(empty_file_path))
+        os.remove(empty_file_path)    
+
 
 class TestContextManager:
     @pytest.mark.parametrize("state", [True, False])
     def test_context_manager_does_not_change_state(self, cfg_file, state):
         yacmap = yacman.YacAttMap(filepath=cfg_file, writable=state)
         with yacmap as _:
-            print(_)
+            # print(_)
+            pass
         assert yacmap.writable == state
 
     @pytest.mark.parametrize("state", [True, False])
@@ -143,9 +157,9 @@ class TestContextManager:
             assert (ycm["x"] == 15)
             # The context manager should create the lock for us
             assert os.path.exists(make_lock_path("conf.yaml", data_path))
-            print(ycm["x"])
+            # print(ycm["x"])
             ycm["abc"] = 3
-            print(ycm)
+            # print(ycm)
             ycm.write()
 
     def test_context_works_with_objects_created_from_entries_with_filepath(
@@ -165,6 +179,9 @@ class TestContextManager:
                 pass
 
 
+
+
+
 yaml_str = """\
 ---
 one: 1
@@ -177,3 +194,47 @@ def test_float_idx():
     assert data["2"] == "two"
     with pytest.raises(KeyError):
         data[2]
+
+
+
+def test_nested_inserts():
+    y = yacman.YAMLConfigManager({})
+    y["test"] = {}
+    y["test"] = {"sample1": 2}
+    y["test"]["sample1"] 
+    y["test"]["sample2"] = 2
+    # Expansion works with nested inserts, too
+    dummy_path = "/dummy/path/example"
+    os.environ['BRAHMS'] = dummy_path
+    y["test"]["sample3"] = "$BRAHMS"
+    assert (y.exp["test"]["sample3"] == dummy_path)
+
+
+
+def test_reinit(data_path):
+    ycm = yacman.YAMLConfigManager(filepath=make_cfg_file_path("conf.yaml", data_path))
+    ycm["abc"] = 6
+    with ycm as _:
+        ycm.write()
+    # The writing process should not reset the file.
+    assert (ycm["abc"] == 6)
+
+def test_reinit_nested(data_path):
+    yacmap = yacman.YacAttMap(entries={"level1": {"level2": "value"}}, writable=True)
+    yacmap.write(filepath=make_cfg_file_path("conf2.yaml", data_path))   
+
+    ycm = yacman.YAMLConfigManager(filepath=make_cfg_file_path("conf2.yaml", data_path))
+    ycm["level1"]["level2b"] = "val2"
+    ycm._reinit()
+    # print(ycm)
+    assert(ycm["level1"]["level2"] == "value")
+    assert(ycm["level1"]["level2b"] == "val2")
+    ycm["level1"] = {"level2c": "inserted"}
+    ycm._reinit()
+    # print(ycm)
+    assert(ycm["level1"]["level2"] == "value")
+    assert(ycm["level1"]["level2c"] == "inserted")
+    with pytest.raises(KeyError):
+        ycm["level1"]["level2b"]
+
+    os.remove(make_cfg_file_path("conf2.yaml", data_path))
