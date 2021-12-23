@@ -138,6 +138,18 @@ class YAMLConfigManager(MutableMapping):
             setattr(getattr(self, IK), SCHEMA_KEY, load_yaml(sp))
             self.validate()
 
+    @property
+    def settings(self):
+        return {
+            "wait_max": self.wait_max,
+            "skip_read_lock": self.skip_read_lock,
+            "schema_source": self.schema_source,
+            "validate_on_write": self.validate_on_write,
+            "locked": self.locked,
+            "strict_ro_locks": self.strict_ro_locks,
+            "locked"           : self.already_locked,
+        }
+
     def load(self, filepath=None, entries=None, yamldata=None, create_file=False):
         if filepath:
             if os.path.exists(filepath):
@@ -319,6 +331,7 @@ class YAMLConfigManager(MutableMapping):
         abs_path = os.path.abspath(fp)
         _LOGGER.debug(f"Wrote to a file: {abs_path}")
         return os.path.abspath(abs_path)
+
 
     def to_yaml(self, trailing_newline=True):
         """
