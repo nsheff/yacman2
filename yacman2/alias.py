@@ -7,13 +7,18 @@ from .yacman import YAMLConfigManager
 
 _LOGGER = logging.getLogger(__name__)
 
+
 class AliasError(Exception):
     """Alias related error."""
+
     pass
+
 
 class UndefinedAliasError(AliasError):
     """Alias is is not defined."""
+
     pass
+
 
 class AliasedYAMLConfigManager(YAMLConfigManager):
     """
@@ -30,7 +35,7 @@ class AliasedYAMLConfigManager(YAMLConfigManager):
         yamldata=None,
         locked=False,
         wait_max=30,
-        strict_ro_locks=False,        
+        strict_ro_locks=False,
         skip_read_lock=False,
         aliases=None,
         exact=False,
@@ -118,9 +123,7 @@ class AliasedYAMLConfigManager(YAMLConfigManager):
             if expand:
                 return self.exp[item]
             else:
-                return super(AliasedYAMLConfigManager, self).__getitem__(
-                    item=item
-                )
+                return super(AliasedYAMLConfigManager, self).__getitem__(item=item)
         except KeyError:
             try:
                 key = self.get_key(item)
@@ -130,9 +133,7 @@ class AliasedYAMLConfigManager(YAMLConfigManager):
                 if expand:
                     return self.exp[key]
                 else:
-                    return super(AliasedYAMLConfigManager, self).__getitem__(
-                        item=key
-                    )
+                    return super(AliasedYAMLConfigManager, self).__getitem__(item=key)
 
     def __contains__(self, key):
         """
@@ -171,7 +172,6 @@ class AliasedYAMLConfigManager(YAMLConfigManager):
         else:
             # alias was used, try to delete the alias
             super(AliasedYAMLConfigManager, self).__delitem__(key=alias_key)
-
 
     def get_aliases(self, key):
         """

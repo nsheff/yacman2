@@ -5,7 +5,7 @@ from setuptools import setup
 # Configuration options edit
 cfg = {
     "package_name": "yacman2",
-    "author": u"Nathan Sheffield, Michal Stolarczyk",
+    "author": "Nathan Sheffield, Michal Stolarczyk",
     "author_email": "nathan@code.databio.org",
     "description": "A standardized configuration object for reference genome assemblies",
     "license": "BSD2",
@@ -39,7 +39,7 @@ with open(os.path.join(cfg["package_name"], "_version.py"), "r") as versionfile:
 
 with open("README.md") as f:
     long_description = f.read()
-    
+
 setup(
     name=cfg["package_name"],
     packages=[cfg["package_name"]],
