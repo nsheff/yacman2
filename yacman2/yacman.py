@@ -51,8 +51,8 @@ from collections.abc import MutableMapping
 
 class YAMLConfigManager(MutableMapping):
     """
-    A YAML configuration manager benefits, providing file locking, loading,
-    writing, etc.  for YAML configuration files. but without the requirement
+    A YAML configuration manager, providing file locking, loading,
+    writing, etc.  for YAML configuration files. Without the requirement
     of attmap (and without providing the attribute-style access).
     """
 
@@ -74,9 +74,9 @@ class YAMLConfigManager(MutableMapping):
 
         :param Iterable[(str, object)] | Mapping[str, object] entries: YAML collection
             of key-value pairs.
-        :param str filepath: YAML filepath to the config file.
+        :param str filepath: Path to the YAML config file.
         :param str yamldata: YAML-formatted string
-        :param bool writable: whether to create the object with write capabilities
+        :param bool locked: Whether to initialize as locked (providing write capability)
         :param int wait_max: how long to wait for creating an object when the file
             that data will be read from is locked
         :param bool strict_ro_locks: By default, we allow RO filesystems that can't be locked.
@@ -89,8 +89,7 @@ class YAMLConfigManager(MutableMapping):
         :param bool validate_on_write: a boolean indicating whether the object should be
             validated every time the `write` method is executed, which is
             a way of preventing invalid config writing
-        :param bool expand: indicator of whether this object should automatically
-            expand paths.
+        :param str create_file: Create an empty file at filepath upon data load.
         """
 
         # Settings for this config object
