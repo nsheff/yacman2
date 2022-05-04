@@ -35,6 +35,38 @@ with yacman.YAMLConfigManager(filepath="/home/nsheff/code/yacman2/tests/data/con
 - writing should only happen in a context manager.
 
 
+
+# aliases
+import yacman2 as yacman
+ycm = yacman.AliasedYAMLConfigManager({"x": 5})
+ycm
+ycm["x"]
+ycm.locked
+ycm.set_aliases("x", "y")
+ycm["y"]
+
+# nested aliases
+ycm = yacman.AliasedYAMLConfigManager({"x": {"z": 5}})
+ycm
+ycm["x"]
+ycm.locked
+ycm.set_aliases("x", "y")
+ycm["y"]
+
+ycm.set_aliases({"x": {"z"}}, "y")
+
+ycm["y"]
+
+
+
+
+
+
+
+
+
+
+
 # test pipestat
 
 import pipestat
@@ -89,6 +121,11 @@ y.x
 y["test"]["sample1"]["home"]
 
 
+
+
+
+
+
 import os
 from tempfile import mkdtemp
 from pipestat import PipestatManager
@@ -126,6 +163,8 @@ psm2 =  PipestatManager(
 
 
 psm2
+
+
 
 
 
