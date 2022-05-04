@@ -23,6 +23,7 @@ _LOGGER = logging.getLogger(__name__)
 # Only do once.
 if not hasattr(yaml.SafeLoader, "patched_yaml_loader"):
     _LOGGER.debug("Patching yaml loader")
+
     def my_construct_mapping(self, node, deep=False):
         data = self.construct_mapping_org(node, deep)
         return {
@@ -31,6 +32,7 @@ if not hasattr(yaml.SafeLoader, "patched_yaml_loader"):
             ]
             for key in data
         }
+
     yaml.SafeLoader.construct_mapping_org = yaml.SafeLoader.construct_mapping
     yaml.SafeLoader.construct_mapping = my_construct_mapping
     yaml.SafeLoader.patched_yaml_loader = True
@@ -48,6 +50,7 @@ ATTR_KEYS = (
 )
 
 from collections.abc import MutableMapping
+
 
 class YAMLConfigManager(MutableMapping):
     """
@@ -80,7 +83,7 @@ class YAMLConfigManager(MutableMapping):
         :param int wait_max: how long to wait for creating an object when the file
             that data will be read from is locked
         :param bool strict_ro_locks: By default, we allow RO filesystems that can't be locked.
-            Turn on strict_ro_locks to error if locks cannot be enforced on readonly filesystems.            
+            Turn on strict_ro_locks to error if locks cannot be enforced on readonly filesystems.
         :param bool skip_read_lock: whether the file should not be locked for reading
             when object is created in read only mode
         :param str schema_source: path or a URL to a jsonschema in YAML format to use
@@ -146,7 +149,7 @@ class YAMLConfigManager(MutableMapping):
             "validate_on_write": self.validate_on_write,
             "locked": self.locked,
             "strict_ro_locks": self.strict_ro_locks,
-            "locked"           : self.already_locked,
+            "locked": self.already_locked,
         }
 
     def load(self, filepath=None, entries=None, yamldata=None, create_file=False):
@@ -317,7 +320,9 @@ class YAMLConfigManager(MutableMapping):
 
         if fp == self.filepath:
             if not self.locked:
-                raise OSError("Please write using a context manager, which locks the file")
+                raise OSError(
+                    "Please write using a context manager, which locks the file"
+                )
 
         _check_filepath(fp)
         _LOGGER.debug(f"Writing to file '{fp}'")
@@ -330,7 +335,6 @@ class YAMLConfigManager(MutableMapping):
         abs_path = os.path.abspath(fp)
         _LOGGER.debug(f"Wrote to a file: {abs_path}")
         return os.path.abspath(abs_path)
-
 
     def to_yaml(self, trailing_newline=True):
         """
