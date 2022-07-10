@@ -12,7 +12,7 @@ Please see [this](docs/usage.md) Python notebook for features and usage instruct
 
 ## New in 2.0
 
-yacman2 changes a lot of things philosophically about how to use yacman. These changes greatly simplify the codebase and dependencies, and in my opinion also make it more straightforward to use.
+yacman2 changes a lot of things philosophically about how to use yacman. These changes greatly simplify the codebase and dependencies, and in my opinion also make it more straightforward to use. 
 
 ### 1. All locking should be handled in context managers.
 

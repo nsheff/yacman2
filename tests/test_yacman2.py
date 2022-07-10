@@ -173,10 +173,11 @@ class TestContextManager:
             pass
 
     def test_context_should_error_if_no_filepath(self, cfg_file):
-        """Test for TypeError raised in case no valid filepath is set but write requested"""
+        """Test for Error raised in case no valid filepath is set but write requested"""
         yacmap = yacman.YacAttMap(entries={})
-        with pytest.raises(TypeError):
+        with pytest.raises(OSError):
             with yacmap as _:
+                yacmap.write()
                 pass
 
 
